@@ -309,3 +309,49 @@ describe("bazarr_history tool", () => {
     expect(Array.isArray(result.series)).toBe(true);
   });
 });
+
+// ─── bazarr_bulk ────────────────────────────────────────────────────────────
+
+describe("bazarr_bulk tool", () => {
+  it("delete_by_filter on empty library returns zero deletions", async () => {
+    const { data, isError } = await callTool("bazarr_bulk", {
+      action: "delete_by_filter",
+      params: { scope: "all" },
+    });
+    expect(isError).toBe(false);
+    const result = data as { deleted: number; skipped: number; details: string[] };
+    expect(result.deleted).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(Array.isArray(result.details)).toBe(true);
+  });
+
+  it("delete_by_filter with provider filter on empty library", async () => {
+    const { data, isError } = await callTool("bazarr_bulk", {
+      action: "delete_by_filter",
+      params: { scope: "series", provider: "opensubtitlescom", language: "en" },
+    });
+    expect(isError).toBe(false);
+    const result = data as { deleted: number; skipped: number };
+    expect(result.deleted).toBe(0);
+  });
+
+  it("delete_by_filter with score filter on empty library", async () => {
+    const { data, isError } = await callTool("bazarr_bulk", {
+      action: "delete_by_filter",
+      params: { scope: "movies", maxScore: 50 },
+    });
+    expect(isError).toBe(false);
+    const result = data as { deleted: number; skipped: number };
+    expect(result.deleted).toBe(0);
+  });
+
+  it("delete_movie_subs with nonexistent radarrid returns zero deletions", async () => {
+    const { data, isError } = await callTool("bazarr_bulk", {
+      action: "delete_movie_subs",
+      params: { radarrid: [999999] },
+    });
+    expect(isError).toBe(false);
+    const result = data as { deleted: number; details: string[] };
+    expect(result.deleted).toBe(0);
+  });
+});

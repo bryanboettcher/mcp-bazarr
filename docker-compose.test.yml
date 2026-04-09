@@ -2,7 +2,7 @@ services:
   bazarr:
     image: linuxserver/bazarr:latest
     ports:
-      - "16767:6767"
+      - "16768:6767"
     environment:
       - PUID=1000
       - PGID=1000

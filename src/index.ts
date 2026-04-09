@@ -424,6 +424,264 @@ Actions: stats`,
   }
 );
 
+// ─── Bulk Operations ────────────────────────────────────────────────
+
+interface Subtitle {
+  path: string;
+  code2: string;
+  forced: boolean;
+  hi: boolean;
+}
+
+interface EpisodeRecord {
+  sonarrSeriesId: number;
+  sonarrEpisodeId: number;
+  title: string;
+  season: number;
+  episode: number;
+  subtitles: Subtitle[];
+}
+
+interface MovieRecord {
+  radarrId: number;
+  title: string;
+  subtitles: Subtitle[];
+}
+
+interface HistoryEntry {
+  subtitles_path: string;
+  provider: string;
+  score: string | null;
+  timestamp: string;
+  action: number;
+  sonarrEpisodeId?: number;
+  radarrId?: number;
+}
+
+/**
+ * Delete external subtitles for a list of episodes, optionally filtering by language.
+ * Returns summary of what was deleted.
+ */
+async function deleteEpisodeSubtitles(
+  seriesId: number,
+  episodes: EpisodeRecord[],
+  filter?: { language?: string; provider?: string; minScore?: number },
+): Promise<{ deleted: number; skipped: number; details: string[] }> {
+  let deleted = 0;
+  let skipped = 0;
+  const details: string[] = [];
+
+  // If filtering by provider/score, we need history to cross-reference
+  let historyByPath: Map<string, HistoryEntry> | undefined;
+  if (filter?.provider || filter?.minScore !== undefined) {
+    historyByPath = new Map();
+    const historyRes = (await client.get("episodes/history", {
+      start: 0, length: -1,
+    })) as { data: HistoryEntry[] };
+    for (const h of historyRes.data) {
+      if (h.subtitles_path) {
+        historyByPath.set(h.subtitles_path, h);
+      }
+    }
+  }
+
+  for (const ep of episodes) {
+    const externalSubs = ep.subtitles.filter((s) => s.path);
+    for (const sub of externalSubs) {
+      // Apply language filter
+      if (filter?.language && sub.code2 !== filter.language) { skipped++; continue; }
+
+      // Apply provider/score filters via history
+      if (historyByPath) {
+        const hist = historyByPath.get(sub.path);
+        if (filter?.provider && (!hist || hist.provider !== filter.provider)) { skipped++; continue; }
+        if (filter?.minScore !== undefined && hist) {
+          const score = parseFloat(hist.score ?? "100");
+          if (score >= filter.minScore) { skipped++; continue; }
+        }
+      }
+
+      await client.delete("episodes/subtitles", {
+        seriesid: seriesId,
+        episodeid: ep.sonarrEpisodeId,
+        language: sub.code2,
+        hi: String(sub.hi),
+        forced: String(sub.forced),
+        path: sub.path,
+      });
+      details.push(`S${String(ep.season).padStart(2, "0")}E${String(ep.episode).padStart(2, "0")} ${ep.title}: ${sub.code2}${sub.hi ? ":hi" : ""}${sub.forced ? ":forced" : ""}`);
+      deleted++;
+    }
+  }
+
+  return { deleted, skipped, details };
+}
+
+/**
+ * Delete external subtitles for movies, optionally filtering.
+ */
+async function deleteMovieSubtitles(
+  movies: MovieRecord[],
+  filter?: { language?: string; provider?: string; minScore?: number },
+): Promise<{ deleted: number; skipped: number; details: string[] }> {
+  let deleted = 0;
+  let skipped = 0;
+  const details: string[] = [];
+
+  let historyByPath: Map<string, HistoryEntry> | undefined;
+  if (filter?.provider || filter?.minScore !== undefined) {
+    historyByPath = new Map();
+    const historyRes = (await client.get("movies/history", {
+      start: 0, length: -1,
+    })) as { data: HistoryEntry[] };
+    for (const h of historyRes.data) {
+      if (h.subtitles_path) {
+        historyByPath.set(h.subtitles_path, h);
+      }
+    }
+  }
+
+  for (const movie of movies) {
+    const externalSubs = movie.subtitles.filter((s) => s.path);
+    for (const sub of externalSubs) {
+      if (filter?.language && sub.code2 !== filter.language) { skipped++; continue; }
+
+      if (historyByPath) {
+        const hist = historyByPath.get(sub.path);
+        if (filter?.provider && (!hist || hist.provider !== filter.provider)) { skipped++; continue; }
+        if (filter?.minScore !== undefined && hist) {
+          const score = parseFloat(hist.score ?? "100");
+          if (score >= filter.minScore) { skipped++; continue; }
+        }
+      }
+
+      await client.delete("movies/subtitles", {
+        radarrid: movie.radarrId,
+        language: sub.code2,
+        hi: String(sub.hi),
+        forced: String(sub.forced),
+        path: sub.path,
+      });
+      details.push(`${movie.title}: ${sub.code2}${sub.hi ? ":hi" : ""}${sub.forced ? ":forced" : ""}`);
+      deleted++;
+    }
+  }
+
+  return { deleted, skipped, details };
+}
+
+server.tool(
+  "bazarr_bulk",
+  `Bulk subtitle operations that orchestrate multiple API calls into a single action.
+Actions: delete_series_subs, redownload_series_subs, delete_movie_subs, redownload_movie_subs, delete_by_filter`,
+  {
+    action: z.enum([
+      "delete_series_subs", "redownload_series_subs",
+      "delete_movie_subs", "redownload_movie_subs",
+      "delete_by_filter",
+    ]).describe(
+      "delete_series_subs: delete all external subs for a series | redownload_series_subs: delete + search_missing | delete_movie_subs/redownload_movie_subs: same for movies | delete_by_filter: delete subs matching criteria across library"
+    ),
+    params: z.record(z.string(), z.any()).optional().describe(
+      `Action parameters:
+- delete_series_subs: {seriesid: number, language?: string} — delete all external subs for series (optionally only a specific language code2, e.g. "en")
+- redownload_series_subs: {seriesid: number, language?: string} — delete all external subs then trigger search_missing for the series
+- delete_movie_subs: {radarrid: number | number[], language?: string} — delete all external subs for movie(s)
+- redownload_movie_subs: {radarrid: number | number[], language?: string} — delete + search_missing for movie(s)
+- delete_by_filter: {scope: "series" | "movies" | "all", provider?: string, maxScore?: number, language?: string} — delete subs matching criteria across the library. provider: only delete subs from this provider. maxScore: only delete subs with score below this percentage (e.g. 50 means delete subs scoring below 50%). Uses history to cross-reference provider and score data with current subtitles.`
+    ),
+  },
+  async ({ action, params: p }) => {
+    const v: P = p ?? {};
+    try {
+      switch (action) {
+        case "delete_series_subs": {
+          const epRes = (await client.get("episodes", { "seriesid[]": [v.seriesid] })) as { data: EpisodeRecord[] };
+          const result = await deleteEpisodeSubtitles(v.seriesid, epRes.data, {
+            language: v.language,
+          });
+          return ok({ action: "delete_series_subs", seriesid: v.seriesid, ...result });
+        }
+
+        case "redownload_series_subs": {
+          const epRes = (await client.get("episodes", { "seriesid[]": [v.seriesid] })) as { data: EpisodeRecord[] };
+          const deleteResult = await deleteEpisodeSubtitles(v.seriesid, epRes.data, {
+            language: v.language,
+          });
+          await client.patch("series", { seriesid: v.seriesid, action: "search-missing" });
+          return ok({
+            action: "redownload_series_subs", seriesid: v.seriesid,
+            ...deleteResult, search_missing_triggered: true,
+          });
+        }
+
+        case "delete_movie_subs": {
+          const ids = Array.isArray(v.radarrid) ? v.radarrid : [v.radarrid];
+          const movieRes = (await client.get("movies", { "radarrid[]": ids })) as { data: MovieRecord[] };
+          const result = await deleteMovieSubtitles(movieRes.data, { language: v.language });
+          return ok({ action: "delete_movie_subs", radarrid: ids, ...result });
+        }
+
+        case "redownload_movie_subs": {
+          const ids = Array.isArray(v.radarrid) ? v.radarrid : [v.radarrid];
+          const movieRes = (await client.get("movies", { "radarrid[]": ids })) as { data: MovieRecord[] };
+          const deleteResult = await deleteMovieSubtitles(movieRes.data, { language: v.language });
+          for (const id of ids) {
+            await client.patch("movies", { radarrid: id, action: "search-missing" });
+          }
+          return ok({
+            action: "redownload_movie_subs", radarrid: ids,
+            ...deleteResult, search_missing_triggered: true,
+          });
+        }
+
+        case "delete_by_filter": {
+          const scope = v.scope ?? "all";
+          const filter = {
+            language: v.language as string | undefined,
+            provider: v.provider as string | undefined,
+            minScore: v.maxScore !== undefined ? Number(v.maxScore) : undefined,
+          };
+          let totalDeleted = 0;
+          let totalSkipped = 0;
+          const allDetails: string[] = [];
+
+          if (scope === "series" || scope === "all") {
+            const seriesRes = (await client.get("series")) as { data: Array<{ sonarrSeriesId: number }> };
+            for (const s of seriesRes.data) {
+              const epRes = (await client.get("episodes", { "seriesid[]": [s.sonarrSeriesId] })) as { data: EpisodeRecord[] };
+              const hasExternalSubs = epRes.data.some((ep) => ep.subtitles?.some((sub) => sub.path));
+              if (!hasExternalSubs) continue;
+              const result = await deleteEpisodeSubtitles(s.sonarrSeriesId, epRes.data, filter);
+              totalDeleted += result.deleted;
+              totalSkipped += result.skipped;
+              allDetails.push(...result.details);
+            }
+          }
+
+          if (scope === "movies" || scope === "all") {
+            const movieRes = (await client.get("movies")) as { data: MovieRecord[] };
+            const moviesWithSubs = movieRes.data.filter((m) => m.subtitles?.some((sub) => sub.path));
+            if (moviesWithSubs.length > 0) {
+              const result = await deleteMovieSubtitles(moviesWithSubs, filter);
+              totalDeleted += result.deleted;
+              totalSkipped += result.skipped;
+              allDetails.push(...result.details);
+            }
+          }
+
+          return ok({
+            action: "delete_by_filter", scope, filter,
+            deleted: totalDeleted, skipped: totalSkipped, details: allDetails,
+          });
+        }
+
+        default: return err(`Unknown action: ${action}`);
+      }
+    } catch (e) { return err(e); }
+  }
+);
+
 // ─── Start Server ───────────────────────────────────────────────────
 
 async function main() {
