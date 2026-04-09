@@ -1,0 +1,35 @@
+auth:
+  apikey: d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f
+  type: null
+  username: ''
+  password: ''
+general:
+  adaptive_searching: true
+  adaptive_searching_delay: 3w
+  adaptive_searching_delta: 1w
+  anti_captcha_provider: null
+  base_url: ''
+  branch: master
+  debug: false
+  embedded_subs_show_desired: true
+  enabled_providers: []
+  hi_extension: '.:hi'
+  ip: 0.0.0.0
+  minimum_score: 90
+  minimum_score_movie: 70
+  multithreading: true
+  page_size: 25
+  path_mappings: '[]'
+  path_mappings_movie: '[]'
+  port: 6767
+  single_language: false
+  subfolder: current
+  upgrade_frequency: 12
+  upgrade_manual: true
+  upgrade_subs: false
+  use_embedded_subs: true
+  use_postprocessing: false
+  use_radarr: false
+  use_sonarr: false
+analytics:
+  enabled: false
