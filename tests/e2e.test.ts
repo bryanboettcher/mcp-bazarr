@@ -97,6 +97,39 @@ describe("settings", () => {
     expect(result.general).toBeDefined();
     expect(result.auth).toBeDefined();
   });
+
+  it("update a boolean setting and verify the change persists", async () => {
+    // Read current value
+    const before = (await client.get("system/settings")) as { subsync: { force_audio: boolean } };
+    const original = before.subsync.force_audio;
+
+    // Toggle it
+    const toggled = !original;
+    await client.post("system/settings", { "settings-subsync-force_audio": String(toggled) });
+
+    // Verify
+    const after = (await client.get("system/settings")) as { subsync: { force_audio: boolean } };
+    expect(after.subsync.force_audio).toBe(toggled);
+
+    // Restore original
+    await client.post("system/settings", { "settings-subsync-force_audio": String(original) });
+
+    const restored = (await client.get("system/settings")) as { subsync: { force_audio: boolean } };
+    expect(restored.subsync.force_audio).toBe(original);
+  });
+
+  it("update a string setting", async () => {
+    const before = (await client.get("system/settings")) as { general: { page_size: number } };
+    const original = before.general.page_size;
+
+    await client.post("system/settings", { "settings-general-page_size": "50" });
+
+    const after = (await client.get("system/settings")) as { general: { page_size: number } };
+    expect(after.general.page_size).toBe(50);
+
+    // Restore
+    await client.post("system/settings", { "settings-general-page_size": String(original) });
+  });
 });
 
 // ─── Tasks ──────────────────────────────────────────────────────────────────

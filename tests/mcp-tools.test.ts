@@ -131,6 +131,50 @@ describe("bazarr_system tool", () => {
     expect(result.auth).toBeDefined();
   });
 
+  it("settings_update toggles a boolean setting via nested object", async () => {
+    // Read current value
+    const { data: beforeData } = await callTool("bazarr_system", { action: "settings_get" });
+    const before = beforeData as { subsync: { force_audio: boolean } };
+    const original = before.subsync.force_audio;
+
+    // Toggle via settings_update (nested {section: {key: value}} format)
+    const { isError } = await callTool("bazarr_system", {
+      action: "settings_update",
+      params: { settings: { subsync: { force_audio: !original } } },
+    });
+    expect(isError).toBe(false);
+
+    // Verify
+    const { data: afterData } = await callTool("bazarr_system", { action: "settings_get" });
+    const after = afterData as { subsync: { force_audio: boolean } };
+    expect(after.subsync.force_audio).toBe(!original);
+
+    // Restore
+    await callTool("bazarr_system", {
+      action: "settings_update",
+      params: { settings: { subsync: { force_audio: original } } },
+    });
+  });
+
+  it("settings_update can set multiple sections at once", async () => {
+    const { isError } = await callTool("bazarr_system", {
+      action: "settings_update",
+      params: { settings: { general: { page_size: 50 }, subsync: { debug: true } } },
+    });
+    expect(isError).toBe(false);
+
+    const { data } = await callTool("bazarr_system", { action: "settings_get" });
+    const result = data as { general: { page_size: number }; subsync: { debug: boolean } };
+    expect(result.general.page_size).toBe(50);
+    expect(result.subsync.debug).toBe(true);
+
+    // Restore
+    await callTool("bazarr_system", {
+      action: "settings_update",
+      params: { settings: { general: { page_size: 25 }, subsync: { debug: false } } },
+    });
+  });
+
   it("tasks_list returns scheduled tasks", async () => {
     const { data, isError } = await callTool("bazarr_system", { action: "tasks_list" });
     expect(isError).toBe(false);

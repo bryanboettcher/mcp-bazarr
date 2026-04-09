@@ -83,10 +83,10 @@ Actions: status, health, badges, languages, language_profiles, search`,
 server.tool(
   "bazarr_system",
   `Bazarr system administration: settings, tasks, logs, backups, announcements.
-Actions: settings_get, tasks_list, task_run, logs, logs_rotate, backups_list, backup_create, backup_restore, backup_delete, announcements, dismiss_announcement, releases, restart, shutdown`,
+Actions: settings_get, settings_update, tasks_list, task_run, logs, logs_rotate, backups_list, backup_create, backup_restore, backup_delete, announcements, dismiss_announcement, releases, restart, shutdown`,
   {
     action: z.enum([
-      "settings_get", "tasks_list", "task_run",
+      "settings_get", "settings_update", "tasks_list", "task_run",
       "logs", "logs_rotate",
       "backups_list", "backup_create", "backup_restore", "backup_delete",
       "announcements", "dismiss_announcement",
@@ -95,6 +95,13 @@ Actions: settings_get, tasks_list, task_run, logs, logs_rotate, backups_list, ba
     params: z.record(z.string(), z.any()).optional().describe(
       `Action parameters:
 - settings_get, tasks_list, logs, backups_list, announcements, releases: {} (no params)
+- settings_update: {settings: Record<string, Record<string, unknown>>} — update settings by section/key.
+  Pass a nested object where top-level keys are config sections and inner keys are setting names.
+  Example: {settings: {subsync: {force_audio: true}, general: {debug: false}}}
+  Bazarr expects form keys in "settings-{section}-{key}" format — this tool handles the conversion.
+  Common sections: general, auth, sonarr, radarr, plex, subsync, proxy, backup, log, analytics,
+  opensubtitlescom, addic7ed, embeddedsubtitles, whisperai, translator, and subtitle provider names.
+  Use settings_get first to see current values and available keys.
 - task_run: {taskid: string} — run a scheduled task immediately
 - logs_rotate: {} — force log rotation
 - backup_create: {} — create new backup
@@ -110,6 +117,21 @@ Actions: settings_get, tasks_list, task_run, logs, logs_rotate, backups_list, ba
     try {
       switch (action) {
         case "settings_get": return ok(await client.get("system/settings"));
+        case "settings_update": {
+          // Convert {section: {key: value}} to {"settings-section-key": value} form data
+          const formData: Record<string, unknown> = {};
+          const settingsObj = v.settings as Record<string, Record<string, unknown>> | undefined;
+          if (!settingsObj || typeof settingsObj !== "object") {
+            return err("settings_update requires {settings: {section: {key: value}}}");
+          }
+          for (const [section, keys] of Object.entries(settingsObj)) {
+            if (typeof keys !== "object" || keys === null) continue;
+            for (const [key, value] of Object.entries(keys)) {
+              formData[`settings-${section}-${key}`] = value;
+            }
+          }
+          return ok(await client.post("system/settings", formData));
+        }
         case "tasks_list": return ok(await client.get("system/tasks"));
         case "task_run": return ok(await client.post("system/tasks", { taskid: v.taskid }));
         case "logs": return ok(await client.get("system/logs"));
